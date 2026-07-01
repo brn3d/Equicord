@@ -110,7 +110,7 @@
     border-color: rgb(255 255 255 / 12%);
 }
 
-.fdm-sender-btn--active {
+.fdm-sender-btn-active {
     border-color: var(--brand-500, #5865f2);
     background: rgb(88 101 242 / 14%);
     color: #fff !important;
@@ -124,7 +124,7 @@
     flex-shrink: 0;
 }
 
-.fdm-sender-avatar--ph {
+.fdm-sender-avatar-placeholder {
     width: 24px;
     height: 24px;
     border-radius: 50%;
@@ -289,10 +289,10 @@
     transition: color 0.2s;
 }
 
-.fdm-status--ok {
+.fdm-status-ok {
     color: #3ba55c !important;
 }
 
-.fdm-status--err {
+.fdm-status-err {
     color: #ed4245 !important;
 }
