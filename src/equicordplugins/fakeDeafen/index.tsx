@@ -4,15 +4,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { ChatBarButton, ChatBarButtonFactory } from "@api/ChatButtons";
+import { UserAreaButton, UserAreaButtonFactory, UserAreaRenderProps } from "@api/UserArea";
 import { EquicordDevs } from "@utils/constants";
-import definePlugin, { IconComponent } from "@utils/types";
+import definePlugin from "@utils/types";
 import { FluxDispatcher, React, UserStore, VoiceActions, VoiceStateStore } from "@webpack/common";
 
 let fakeDeafened = false;
 let originalToggleSelfDeaf: (() => void) | null = null;
 
-function setFakeDeafen(enabled: boolean) {
+function applyFakeDeafen(enabled: boolean) {
     fakeDeafened = enabled;
 
     const currentUser = UserStore.getCurrentUser();
@@ -37,71 +37,69 @@ function patchedToggleSelfDeaf() {
     }
 
     const currentUser = UserStore.getCurrentUser();
-    const voiceState = VoiceStateStore.getVoiceStateForUser(currentUser.id);
+    const voiceState = currentUser && VoiceStateStore.getVoiceStateForUser(currentUser.id);
     if (!voiceState) return;
-
-    const nowDeafened = !voiceState.selfDeaf;
 
     FluxDispatcher.dispatch({
         type: "VOICE_STATE_UPDATES",
         voiceStates: [{
             ...voiceState,
-            selfDeaf: nowDeafened,
-            selfMute: nowDeafened ? true : voiceState.selfMute,
+            selfDeaf: !voiceState.selfDeaf,
+            selfMute: !voiceState.selfDeaf ? true : voiceState.selfMute,
         }],
     });
 }
 
 // ─── Ghost Icon ───────────────────────────────────────────────────────────────
-const GhostIcon: IconComponent = ({ height = 20, width = 20, className }) => (
-    <svg
-        className={className}
-        aria-hidden="true"
-        role="img"
-        xmlns="http://www.w3.org/2000/svg"
-        width={width}
-        height={height}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-    >
-        <path d="M12 2a8 8 0 0 0-8 8v10l3-3 3 3 3-3 3 3 3-3V10a8 8 0 0 0-8-8Zm-2.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z" />
-    </svg>
-);
+function GhostIcon({ active = false, className = "" }: { active?: boolean; className?: string; }) {
+    return (
+        <svg
+            className={className}
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill={active ? "var(--status-danger)" : "currentColor"}
+        >
+            <path d="M12 2a8 8 0 0 0-8 8v10l3-3 3 3 3-3 3 3 3-3V10a8 8 0 0 0-8-8Zm-2.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z" />
+        </svg>
+    );
+}
 
-// ─── Chat Bar Button ──────────────────────────────────────────────────────────
-const FakeDeafenButton: ChatBarButtonFactory = ({ isMainChat }) => {
-    const [active, setActive] = React.useState(false);
-
-    if (!isMainChat) return null;
+// ─── User Area Button ─────────────────────────────────────────────────────────
+function FakeDeafenButton({ iconForeground, hideTooltips, nameplate }: UserAreaRenderProps) {
+    const [, forceUpdate] = React.useReducer(x => x + 1, 0);
 
     function toggle() {
-        const next = !active;
-        setActive(next);
-        setFakeDeafen(next);
+        applyFakeDeafen(!fakeDeafened);
+        forceUpdate();
     }
 
     return (
-        <ChatBarButton
-            tooltip={active ? "Fake Deafen: ON — click to disable" : "Fake Deafen: OFF — click to enable"}
+        <UserAreaButton
+            tooltipText={hideTooltips ? void 0 : fakeDeafened ? "Fake Deafen: ON" : "Fake Deafen: OFF"}
+            icon={<GhostIcon active={fakeDeafened} className={iconForeground} />}
+            role="switch"
+            aria-checked={fakeDeafened}
+            redGlow={fakeDeafened}
+            plated={nameplate != null}
             onClick={toggle}
-            buttonProps={{ style: { color: active ? "var(--status-danger, #ed4245)" : undefined } }}
-        >
-            <GhostIcon />
-        </ChatBarButton>
+        />
     );
-};
+}
+
+const FakeDeafenUserAreaButton: UserAreaButtonFactory = props => <FakeDeafenButton {...props} />;
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 export default definePlugin({
     name: "FakeDeafen",
-    description: "Appear deafened to others in voice while still hearing audio. Toggle with the ghost icon in the chat bar.",
+    description: "Appear deafened to others in voice while still hearing audio. Toggle with the ghost button next to mute/deafen.",
     tags: ["Voice", "Privacy"],
     authors: [EquicordDevs.nobody],
-    dependencies: ["ChatInputButtonAPI"],
+    dependencies: ["UserAreaAPI"],
 
-    chatBarButton: {
+    userAreaButton: {
         icon: GhostIcon,
-        render: FakeDeafenButton,
+        render: FakeDeafenUserAreaButton,
     },
 
     start() {
