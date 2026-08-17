@@ -4,31 +4,45 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import ErrorBoundary from "@components/ErrorBoundary";
 import { UserAreaButton, UserAreaButtonFactory, UserAreaRenderProps } from "@api/UserArea";
 import { EquicordDevs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { FluxDispatcher, React, UserStore, VoiceActions, VoiceStateStore } from "@webpack/common";
+import { findByProps } from "@webpack";
+import { FluxDispatcher, React, UserStore, VoiceStateStore } from "@webpack/common";
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let fakeDeafened = false;
-let deafPayload: ArrayBuffer | null = null;
-let undeafPayload: ArrayBuffer | null = null;
-let capturing = false;
+let originalSend: ((op: number, data: any, ...args: any[]) => void) | null = null;
 
-const originalSend = WebSocket.prototype.send;
-const decoder = new TextDecoder();
-const deafTrueRegex = /self_deaf.{0,4}true/;
-const deafFalseRegex = /self_deaf.{0,4}false/;
+// ─── Voice state helpers ──────────────────────────────────────────────────────
+function refreshVoiceState(enabled: boolean) {
+    const ChannelStore = findByProps("getChannel", "getDMFromUserId");
+    const SelectedChannelStore = findByProps("getVoiceChannelId");
+    const wsModule = findByProps("getSocket");
+    const MediaEngineStore = findByProps("isDeaf", "isMute");
 
-function getGatewayWs(): WebSocket | null {
-    for (const key of Object.getOwnPropertyNames(window)) {
-        try {
-            const val = (window as any)[key];
-            if (val instanceof WebSocket && val.url.includes("gateway.discord.gg") && val.readyState === WebSocket.OPEN)
-                return val;
-        } catch { }
+    if (!wsModule || !SelectedChannelStore) return;
+
+    const socket = wsModule.getSocket();
+    const channelId = SelectedChannelStore.getVoiceChannelId();
+    const channel = channelId ? ChannelStore?.getChannel(channelId) : null;
+
+    if (!socket || !channelId) return;
+
+    try {
+        // op 4 = voice state update
+        socket.send(4, {
+            guild_id: channel?.guild_id ?? null,
+            channel_id: channelId,
+            self_mute: (enabled || (MediaEngineStore?.isMute() ?? false)),
+            self_deaf: enabled || (MediaEngineStore?.isDeaf() ?? false),
+            self_video: false,
+            flags: 0,
+        });
+    } catch (error) {
+        console.error("[FakeDeafen] failed to update voice state:", error);
     }
-    return null;
 }
 
 function updateLocalVoiceState(selfDeaf: boolean) {
@@ -47,89 +61,51 @@ function updateLocalVoiceState(selfDeaf: boolean) {
     });
 }
 
-function patchedSend(this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-    if (data instanceof ArrayBuffer) {
-        const text = decoder.decode(data);
-
-        if (deafTrueRegex.test(text)) {
-            deafPayload = data;
-            // If this was a silent capture, swallow it — don't actually send
-            if (capturing) return;
-        }
-        if (deafFalseRegex.test(text)) {
-            undeafPayload = data;
-            // Swallow real undeafen while fake deafen is on
-            if (fakeDeafened) return;
-            // Swallow during silent capture
-            if (capturing) return;
-        }
-    }
-    return originalSend.call(this, data as any);
-}
-
-// Silently deafen+undeafen to capture both payloads without the user noticing
-async function capturePayloads(): Promise<void> {
-    return new Promise(resolve => {
-        capturing = true;
-        // Trigger deafen — patchedSend will capture but swallow the packet
-        VoiceActions.toggleSelfDeaf();
-        setTimeout(() => {
-            // Trigger undeafen — patchedSend will capture but swallow
-            VoiceActions.toggleSelfDeaf();
-            setTimeout(() => {
-                capturing = false;
-                resolve();
-            }, 100);
-        }, 100);
-    });
-}
-
-async function toggleFakeDeafen() {
-    // Capture payloads on first use if we don't have them yet
-    if (!deafPayload || !undeafPayload) {
-        await capturePayloads();
-    }
-
-    const ws = getGatewayWs();
+function toggleFakeDeafen() {
     fakeDeafened = !fakeDeafened;
-
-    if (fakeDeafened) {
-        if (deafPayload && ws) originalSend.call(ws, deafPayload);
-        updateLocalVoiceState(true);
-    } else {
-        if (undeafPayload && ws) originalSend.call(ws, undeafPayload);
-        updateLocalVoiceState(false);
-    }
+    refreshVoiceState(fakeDeafened);
+    updateLocalVoiceState(fakeDeafened);
 }
 
-// ─── Ghost Icon ───────────────────────────────────────────────────────────────
-function GhostIcon({ active = false, className = "" }: { active?: boolean; className?: string; }) {
+// ─── Icon ─────────────────────────────────────────────────────────────────────
+function DeafenIcon({ active = false, className = "" }: { active?: boolean; className?: string; }) {
+    const color = active ? "var(--status-danger)" : "currentColor";
     return (
-        <svg
-            className={className}
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill={active ? "var(--status-danger)" : "currentColor"}
-        >
-            <path d="M12 2a8 8 0 0 0-8 8v10l3-3 3 3 3-3 3 3 3-3V10a8 8 0 0 0-8-8Zm-2.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z" />
+        <svg className={className} width="20" height="20" viewBox="0 0 32 32" fill="none">
+            <rect x="6" y="8" width="20" height="4" rx="2" fill={color} />
+            <rect x="11" y="3" width="10" height="8" rx="3" fill={color} />
+            {active ? (
+                <>
+                    <line x1="7" y1="18" x2="13" y2="24" stroke={color} strokeWidth="2" />
+                    <line x1="13" y1="18" x2="7" y2="24" stroke={color} strokeWidth="2" />
+                    <line x1="19" y1="18" x2="25" y2="24" stroke={color} strokeWidth="2" />
+                    <line x1="25" y1="18" x2="19" y2="24" stroke={color} strokeWidth="2" />
+                    <path d="M14 23c1-1 3-1 4 0" stroke={color} strokeWidth="2" strokeLinecap="round" />
+                </>
+            ) : (
+                <>
+                    <circle cx="10" cy="21" r="4" stroke={color} strokeWidth="2" fill="none" />
+                    <circle cx="22" cy="21" r="4" stroke={color} strokeWidth="2" fill="none" />
+                    <path d="M14 21c1 1 3 1 4 0" stroke={color} strokeWidth="2" strokeLinecap="round" />
+                </>
+            )}
         </svg>
     );
 }
 
-// ─── User Area Button ─────────────────────────────────────────────────────────
+// ─── Button ───────────────────────────────────────────────────────────────────
 function FakeDeafenButton({ iconForeground, hideTooltips, nameplate }: UserAreaRenderProps) {
     const [, forceUpdate] = React.useReducer(x => x + 1, 0);
 
-    async function toggle() {
-        await toggleFakeDeafen();
+    function toggle() {
+        toggleFakeDeafen();
         forceUpdate();
     }
 
     return (
         <UserAreaButton
-            tooltipText={hideTooltips ? void 0 : fakeDeafened ? "Fake Deafen: ON" : "Fake Deafen: OFF"}
-            icon={<GhostIcon active={fakeDeafened} className={iconForeground} />}
+            tooltipText={hideTooltips ? void 0 : fakeDeafened ? "Disable Fake Deafen" : "Enable Fake Deafen"}
+            icon={<DeafenIcon active={fakeDeafened} className={iconForeground} />}
             role="switch"
             aria-checked={fakeDeafened}
             redGlow={fakeDeafened}
@@ -139,37 +115,66 @@ function FakeDeafenButton({ iconForeground, hideTooltips, nameplate }: UserAreaR
     );
 }
 
-const FakeDeafenUserAreaButton: UserAreaButtonFactory = props => <FakeDeafenButton {...props} />;
+const FakeDeafenUserAreaButton: UserAreaButtonFactory = props => (
+    <ErrorBoundary noop>
+        <FakeDeafenButton {...props} />
+    </ErrorBoundary>
+);
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 export default definePlugin({
     name: "FakeDeafen",
-    description: "Ghost button next to mute/deafen — tells Discord you're deafened without muting local audio. Visually shows as deafened.",
+    description: "Tells Discord you're deafened without actually muting your audio. Button appears next to mute/deafen.",
     tags: ["Voice", "Privacy"],
     authors: [EquicordDevs.nobody],
     dependencies: ["UserAreaAPI"],
 
     userAreaButton: {
-        icon: GhostIcon,
+        icon: DeafenIcon,
         render: FakeDeafenUserAreaButton,
     },
 
     start() {
-        WebSocket.prototype.send = patchedSend;
+        const wsModule = findByProps("getSocket");
+        if (!wsModule) {
+            console.error("[FakeDeafen] ws module not found");
+            return;
+        }
+
+        const socket = wsModule.getSocket();
+        if (!socket) {
+            console.error("[FakeDeafen] socket not found");
+            return;
+        }
+
+        originalSend = socket.send;
+
+        // Intercept outgoing voice state updates to enforce fake deafen
+        socket.send = function (op: number, data: any, ...args: any[]) {
+            if (op === 4 && fakeDeafened && data) {
+                data.self_deaf = true;
+                data.self_mute = true;
+            }
+            return originalSend!.apply(this, [op, data, ...args]);
+        };
     },
 
     stop() {
-        WebSocket.prototype.send = originalSend;
-
-        if (fakeDeafened) {
-            const ws = getGatewayWs();
-            if (ws && undeafPayload) originalSend.call(ws, undeafPayload);
-            updateLocalVoiceState(false);
-            fakeDeafened = false;
+        const wsModule = findByProps("getSocket");
+        if (wsModule) {
+            const socket = wsModule.getSocket();
+            if (socket && originalSend) {
+                socket.send = originalSend;
+            }
         }
 
-        deafPayload = null;
-        undeafPayload = null;
-        capturing = false;
+        // Restore real voice state if fake deafen was active
+        if (fakeDeafened) {
+            fakeDeafened = false;
+            refreshVoiceState(false);
+            updateLocalVoiceState(false);
+        }
+
+        originalSend = null;
     },
 });
