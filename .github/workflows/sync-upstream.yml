@@ -31,23 +31,22 @@ jobs:
           git remote add upstream https://github.com/Equicord/Equicord.git
           git fetch upstream main
 
-      - name: Preserve fork autofix workflow
+      - name: Sync upstream files, excluding workflows
         run: |
-          mkdir -p /tmp/fork-workflows
-          cp .github/workflows/autofix.yml /tmp/fork-workflows/autofix.yml
+          git merge upstream/main --no-commit --no-ff -X ours || true
 
-      - name: Merge upstream
-        run: |
-          git merge upstream/main --no-edit -X ours
+          # Restore the fork's existing workflow directory
+          git restore --source=HEAD --staged --worktree -- .github/workflows/
 
-      - name: Restore fork autofix workflow
-        run: |
-          cp /tmp/fork-workflows/autofix.yml .github/workflows/autofix.yml
-          git add .github/workflows/autofix.yml
-          if ! git diff --cached --quiet; then
-            git commit -m "Preserve fork autofix workflow"
+          # If there are no changes, don't create an empty commit
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "Already up to date."
+            exit 0
           fi
+
+          git add -A
+          git commit -m "Sync with Equicord upstream"
 
       - name: Push changes
         run: |
-          git push origin main
+          git push origin HEAD:main
